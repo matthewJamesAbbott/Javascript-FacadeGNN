@@ -1,3 +1,27 @@
+<!--
+MIT License
+
+Copyright (c) 2025 Matthew Abbott
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions: 
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -8,13 +32,36 @@
         body {
             font-family: Arial, sans-serif;
             margin: 2rem;
+            background: #fafafa;
         }
 
         input,
         select,
-        textarea,
+        textarea {
+            margin: 0.5rem 0;
+        }
+
         button {
             margin: 0.5rem 0;
+            background: #5a5a5a;
+            border-radius: 0;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #4a4a4a;
+        }
+
+        button:active {
+            background: #3a3a3a;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
         }
 
         .section {
@@ -150,6 +197,11 @@
 <body>
     <h1>Graph Neural Network with Facade</h1>
 
+    <div class="section" id="networkVizSection" style="display:none;">
+        <h2>Network Architecture</h2>
+        <div id="networkVisualization"></div>
+    </div>
+
     <div class="section">
         <h2>Network Configuration</h2>
         <label class="inline-label">Feature Size: <input type="number" id="featureSize" value="3" min="1"></label>
@@ -272,6 +324,15 @@
         <div id="trainStatus"></div>
         <div id="trainingProgress"></div>
         <div id="csvTargetsInfo" style="color:#666; font-size:0.9rem; margin-top:0.5rem;"></div>
+    </div>
+
+    <div class="section">
+        <h2>Model Persistence</h2>
+        <p style="color:#666; font-size:0.9rem;">Save and load trained models. Models are automatically saved to browser storage and can be downloaded as JSON files.</p>
+        <br>
+        <button onclick="saveModel()">Save Model</button>
+        <button onclick="loadModel()">Load Model</button>
+        <span id="persistenceStatus" style="margin-left:1rem;"></span>
     </div>
 
     <div class="section facade-section">
@@ -1439,6 +1500,7 @@ function createNetwork() {
     facade.setLearningRate(learningRate);
     
     document.getElementById('networkStatus').innerText = `Network created! ${numLayers} MP layers, ${facade.getParameterCount()} parameters`;
+    visualizeGNNArchitecture(facade.gnn, 'networkVisualization');
 }
 
 function buildGraph() {
@@ -2458,6 +2520,303 @@ function updateCsvTargetsInfo() {
         infoDiv.innerText = '';
     }
 }
+
+// ==================== MODEL PERSISTENCE ====================
+
+function convertNeuronsToDenseFormat(layerData) {
+    // Convert from neurons array format to DenseLayer.setWeights format
+    if (!layerData || !layerData.neurons) return null;
+    
+    const weights = layerData.neurons.map(n => n.weights);
+    const biases = layerData.neurons.map(n => n.bias || 0);
+    
+    return { weights, biases };
+}
+
+function saveModel() {
+    if (!facade || !facade.gnn) {
+        document.getElementById('persistenceStatus').innerHTML = '<div class="error-msg">No model to save. Create network and train first.</div>';
+        return;
+    }
+    
+    const data = {
+        weights: facade.gnn.getWeights(),
+        lossHistory: [],
+        feature_size: parseInt(document.getElementById('featureSize').value),
+        hidden_size: parseInt(document.getElementById('hiddenSize').value),
+        output_size: parseInt(document.getElementById('outputSize').value),
+        num_message_passing_layers: parseInt(document.getElementById('numLayers').value),
+        timestamp: new Date().toISOString()
+    };
+    
+    try {
+        localStorage.setItem('gnn_model_facade', JSON.stringify(data));
+        document.getElementById('persistenceStatus').innerHTML = '<div class="success-msg">Model saved to localStorage</div>';
+    } catch (e) {
+        console.error('localStorage save failed:', e);
+    }
+    
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'gnn_model_facade.json';
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function loadModel() {
+    const stored = localStorage.getItem('gnn_model_facade');
+    if (stored) {
+        try {
+            const data = JSON.parse(stored);
+            loadModelData(data);
+            return;
+        } catch (e) {
+            console.error('Failed to load from localStorage:', e);
+        }
+    }
+    
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        try {
+            const text = await file.text();
+            const data = JSON.parse(text);
+            loadModelData(data);
+        } catch (err) {
+            document.getElementById('persistenceStatus').innerHTML = `<div class="error-msg">Failed to load model: ${err.message}</div>`;
+        }
+    };
+    input.click();
+}
+
+function loadModelData(data) {
+    // Extract config - handle nested or root-level snake_case
+    const featureSize = data.feature_size || data.featureSize || (data.weights?.featureSize);
+    const hiddenSize = data.hidden_size || data.hiddenSize || (data.weights?.hiddenSize);
+    const outputSize = data.output_size || data.outputSize || (data.weights?.outputSize);
+    const numMPLayers = data.num_message_passing_layers || data.numMPLayers || (data.weights?.numMPLayers);
+    
+    document.getElementById('featureSize').value = featureSize;
+    document.getElementById('hiddenSize').value = hiddenSize;
+    document.getElementById('outputSize').value = outputSize;
+    document.getElementById('numLayers').value = numMPLayers;
+    
+    // Create network with loaded config
+    createNetwork();
+    
+    // Load weights - handle both formats
+    const messageLayers = data.message_layers || data.messageLayers || [];
+    const updateLayers = data.update_layers || data.updateLayers || [];
+    const readoutLayer = data.readout_layer || data.readoutLayer;
+    const outputLayer = data.output_layer || data.outputLayer;
+    
+    // Convert each layer from neuron format to DenseLayer format
+    if (messageLayers.length > 0) {
+        messageLayers.forEach((layer, i) => {
+            const converted = convertNeuronsToDenseFormat(layer);
+            if (converted && facade.gnn.messageLayers[i]) {
+                facade.gnn.messageLayers[i].setWeights(converted);
+            }
+        });
+    }
+    
+    if (updateLayers.length > 0) {
+        updateLayers.forEach((layer, i) => {
+            const converted = convertNeuronsToDenseFormat(layer);
+            if (converted && facade.gnn.updateLayers[i]) {
+                facade.gnn.updateLayers[i].setWeights(converted);
+            }
+        });
+    }
+    
+    if (readoutLayer) {
+        const converted = convertNeuronsToDenseFormat(readoutLayer);
+        if (converted && facade.gnn.readoutLayer) {
+            facade.gnn.readoutLayer.setWeights(converted);
+        }
+    }
+    
+    if (outputLayer) {
+        const converted = convertNeuronsToDenseFormat(outputLayer);
+        if (converted && facade.gnn.outputLayer) {
+            facade.gnn.outputLayer.setWeights(converted);
+        }
+    }
+    
+    // Check if graph is already loaded - if so, model is fully trained and ready
+    const graphLoaded = facade && facade.graphLoaded;
+    let statusMsg = `Model loaded successfully with pre-trained weights. `;
+    
+    if (graphLoaded) {
+        statusMsg += `Graph is configured. Ready to make predictions or retrain.`;
+    } else {
+        statusMsg += `Configure a graph and click "Predict Only" to use the model, or set a target and train to continue learning.`;
+    }
+    
+    document.getElementById('persistenceStatus').innerHTML = `<div class="success-msg">${statusMsg}</div>`;
+    visualizeGNNArchitecture(facade.gnn, 'networkVisualization');
+}
+
+// ==================== GNN ARCHITECTURE VISUALIZATION ====================
+
+function visualizeGNNArchitecture(gnn, containerId) {
+    const container = document.getElementById(containerId);
+    const section = document.getElementById('networkVizSection');
+    if (!container || !section) return;
+    
+    // Show the section
+    section.style.display = 'block';
+    
+    // Read from GNN object if available, otherwise from form
+    const featureSize = gnn?.featureSize ?? parseInt(document.getElementById('featureSize').value) ?? 3;
+    const hiddenSize = gnn?.hiddenSize ?? parseInt(document.getElementById('hiddenSize').value) ?? 16;
+    const outputSize = gnn?.outputSize ?? parseInt(document.getElementById('outputSize').value) ?? 2;
+    const numMPLayers = gnn?.numMPLayers ?? parseInt(document.getElementById('numLayers').value) ?? 2;
+    
+    const spacing = 85;
+    const padding = 20;
+    const legendSpace = 80;
+    const totalLayers = 2 + numMPLayers * 2 + 2;
+    const totalWidth = totalLayers * spacing + padding * 2 + legendSpace;
+    const totalHeight = 200;
+    
+    const svgContainer = document.createElement('div');
+    svgContainer.setAttribute('style', 'overflow-x: auto; overflow-y: hidden; border: 1px solid #ccc; background: #fafafa; border-radius: 4px; margin: 1rem 0; height: 220px;');
+    
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', totalWidth);
+    svg.setAttribute('height', totalHeight);
+    svg.setAttribute('style', 'display: block;');
+    
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    defs.innerHTML = `
+        <linearGradient id="msgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#4285f4;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#1967d2;stop-opacity:1" />
+        </linearGradient>
+        <linearGradient id="updGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#34a853;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#188038;stop-opacity:1" />
+        </linearGradient>
+        <linearGradient id="readGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#ea4335;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#c5221f;stop-opacity:1" />
+        </linearGradient>
+        <linearGradient id="outGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#fbbc04;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#f57d00;stop-opacity:1" />
+        </linearGradient>
+    `;
+    svg.appendChild(defs);
+    
+    let xPos = padding + legendSpace;
+    const cy = totalHeight / 2;
+    
+    function drawBox(x, y, w, h, fill, stroke, texts) {
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        const box = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        box.setAttribute('x', x - w/2);
+        box.setAttribute('y', y - h/2);
+        box.setAttribute('width', w);
+        box.setAttribute('height', h);
+        box.setAttribute('fill', fill);
+        box.setAttribute('stroke', stroke);
+        box.setAttribute('stroke-width', 1.5);
+        box.setAttribute('rx', 3);
+        g.appendChild(box);
+        
+        texts.forEach((t, i) => {
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', x);
+            text.setAttribute('y', y - 18 + i * 14);
+            text.setAttribute('text-anchor', 'middle');
+            text.setAttribute('font-size', t.size || '9');
+            if (t.bold) text.setAttribute('font-weight', 'bold');
+            text.setAttribute('fill', t.color || 'white');
+            text.textContent = t.text;
+            g.appendChild(text);
+        });
+        svg.appendChild(g);
+    }
+    
+    // Input layer
+    drawBox(xPos, cy, 50, 70, '#e8f5e9', '#2e7d32', [
+        { text: 'Input', size: '10', bold: true, color: '#1b5e20' },
+        { text: `${featureSize}f`, size: '9', color: '#1b5e20' }
+    ]);
+    xPos += spacing;
+    
+    // Message passing layers
+    for (let i = 0; i < numMPLayers; i++) {
+        const inputSize = i === 0 ? featureSize * 2 : hiddenSize * 2;
+        drawBox(xPos, cy, 56, 70, 'url(#msgGrad)', '#1967d2', [
+            { text: `Msg${i+1}`, size: '9', bold: true },
+            { text: `${inputSize}→${hiddenSize}`, size: '8' }
+        ]);
+        xPos += spacing;
+        
+        drawBox(xPos, cy, 56, 70, 'url(#updGrad)', '#188038', [
+            { text: `Upd${i+1}`, size: '9', bold: true },
+            { text: `${hiddenSize*2}→${hiddenSize}`, size: '8' }
+        ]);
+        xPos += spacing;
+    }
+    
+    // Readout
+    drawBox(xPos, cy, 50, 70, 'url(#readGrad)', '#c5221f', [
+        { text: 'Readout', size: '9', bold: true },
+        { text: `${hiddenSize}`, size: '8' }
+    ]);
+    xPos += spacing;
+    
+    // Output
+    drawBox(xPos, cy, 56, 70, 'url(#outGrad)', '#f57d00', [
+        { text: 'Output', size: '10', bold: true },
+        { text: `${outputSize}c`, size: '8' }
+    ]);
+    
+    // Legend
+    const legendItems = [
+        { label: 'Msg', color: 'url(#msgGrad)' },
+        { label: 'Upd', color: 'url(#updGrad)' },
+        { label: 'Read', color: 'url(#readGrad)' },
+        { label: 'Out', color: 'url(#outGrad)' }
+    ];
+    let ly = cy - 30;
+    legendItems.forEach(item => {
+        const box = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        box.setAttribute('x', padding + 5);
+        box.setAttribute('y', ly);
+        box.setAttribute('width', 10);
+        box.setAttribute('height', 10);
+        box.setAttribute('fill', item.color);
+        box.setAttribute('stroke', '#666');
+        box.setAttribute('stroke-width', 0.5);
+        box.setAttribute('rx', 2);
+        svg.appendChild(box);
+        
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', padding + 19);
+        text.setAttribute('y', ly + 8);
+        text.setAttribute('font-size', '9');
+        text.setAttribute('fill', '#333');
+        text.textContent = item.label;
+        svg.appendChild(text);
+        ly += 13;
+    });
+    
+    svgContainer.innerHTML = '';
+    svgContainer.appendChild(svg);
+    container.innerHTML = '';
+    container.appendChild(svgContainer);
+}
+
 </script>
 </body>
 </html>
